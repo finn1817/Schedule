@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox
 import pandas as pd
 from datetime import datetime, timedelta
 import sqlite3
@@ -16,22 +16,17 @@ class SchedulerApp:
         self.db_file = 'data/schedule.db'
         self.ensure_database_exists()
         
-        # make the main container
-        self.main_container = ttk.Frame(root)
-        self.main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # make main notebook
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # make a notebook for tabs
-        self.notebook = ttk.Notebook(self.main_container)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
-        
-        # make the tabs
+        # make tabs
         self.setup_workplace_tab()
         self.setup_import_tab()
         self.setup_schedule_tab()
-        self.setup_shift_management_tab()
         
-        # update the workplace dropdown lists
-        self.update_workplace_list()
+        # update workplace lists
+        self.load_workplaces()
 
     def ensure_database_exists(self):
         if not os.path.exists('data'):
@@ -40,14 +35,26 @@ class SchedulerApp:
         conn = sqlite3.connect(self.db_file)
         c = conn.cursor()
         
-        # make workplaces table
+        # make workplaces table with operating hours for each day
         c.execute('''CREATE TABLE IF NOT EXISTS workplaces
                     (id INTEGER PRIMARY KEY,
                      name TEXT NOT NULL,
-                     hours_open TEXT NOT NULL,
-                     hours_close TEXT NOT NULL)''')
+                     sunday_open TEXT,
+                     sunday_close TEXT,
+                     monday_open TEXT,
+                     monday_close TEXT,
+                     tuesday_open TEXT,
+                     tuesday_close TEXT,
+                     wednesday_open TEXT,
+                     wednesday_close TEXT,
+                     thursday_open TEXT,
+                     thursday_close TEXT,
+                     friday_open TEXT,
+                     friday_close TEXT,
+                     saturday_open TEXT,
+                     saturday_close TEXT)''')
         
-        # make the workers table with work study field
+        # make workers table
         c.execute('''CREATE TABLE IF NOT EXISTS workers
                     (id INTEGER PRIMARY KEY,
                      workplace_id INTEGER,
@@ -55,7 +62,6 @@ class SchedulerApp:
                      last_name TEXT NOT NULL,
                      email TEXT NOT NULL,
                      work_study BOOLEAN NOT NULL,
-                     preferred_shifts INTEGER DEFAULT 0,
                      FOREIGN KEY (workplace_id) REFERENCES workplaces(id))''')
         
         # make availability table
@@ -67,18 +73,7 @@ class SchedulerApp:
                      end_time TEXT NOT NULL,
                      FOREIGN KEY (worker_id) REFERENCES workers(id))''')
         
-        # make schedules table
-        c.execute('''CREATE TABLE IF NOT EXISTS schedules
-                    (id INTEGER PRIMARY KEY,
-                     workplace_id INTEGER,
-                     worker_id INTEGER,
-                     date TEXT NOT NULL,
-                     start_time TEXT NOT NULL,
-                     end_time TEXT NOT NULL,
-                     FOREIGN KEY (workplace_id) REFERENCES workplaces(id),
-                     FOREIGN KEY (worker_id) REFERENCES workers(id))''')
-        
-        # make shifts table
+        # make the shifts table
         c.execute('''CREATE TABLE IF NOT EXISTS shifts
                     (id INTEGER PRIMARY KEY,
                      workplace_id INTEGER,
@@ -93,578 +88,455 @@ class SchedulerApp:
         
     def setup_workplace_tab(self):
         workplace_frame = ttk.Frame(self.notebook)
-        self.notebook.add(workplace_frame, text="Workplace Management")
+        self.notebook.add(workplace_frame, text="Workplace Hours")
         
-        # workplace controls
-        ttk.Label(workplace_frame, text="Workplace Name:").grid(row=0, column=0, pady=5, sticky='w')
+        # workplace name input
+        ttk.Label(workplace_frame, text="Workplace Name:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
         self.workplace_name = ttk.Entry(workplace_frame, width=30)
-        self.workplace_name.grid(row=0, column=1, pady=5, sticky='w')
+        self.workplace_name.grid(row=0, column=1, padx=5, pady=5, sticky='w')
         
-        ttk.Label(workplace_frame, text="Opening Time (HH:MM AM/PM):").grid(row=1, column=0, pady=5, sticky='w')
-        self.opening_time = ttk.Entry(workplace_frame, width=30)
-        self.opening_time.grid(row=1, column=1, pady=5, sticky='w')
-        self.opening_time.insert(0, "12:00 PM")
+        # create frame for hours
+        hours_frame = ttk.LabelFrame(workplace_frame, text="Operating Hours (HH:MM AM/PM)")
+        hours_frame.grid(row=1, column=0, columnspan=4, padx=10, pady=10, sticky='nsew')
         
-        ttk.Label(workplace_frame, text="Closing Time (HH:MM AM/PM):").grid(row=2, column=0, pady=5, sticky='w')
-        self.closing_time = ttk.Entry(workplace_frame, width=30)
-        self.closing_time.grid(row=2, column=1, pady=5, sticky='w')
-        self.closing_time.insert(0, "12:00 AM")
+        # day headers
+        days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        ttk.Label(hours_frame, text="Day").grid(row=0, column=0, padx=5, pady=5)
+        ttk.Label(hours_frame, text="Open").grid(row=0, column=1, padx=5, pady=5)
+        ttk.Label(hours_frame, text="Close").grid(row=0, column=2, padx=5, pady=5)
         
-        ttk.Button(workplace_frame, text="Add Workplace", 
-                  command=self.add_workplace).grid(row=3, column=0, columnspan=1, pady=10, sticky='w')
+        # operating hours inputs for each day
+        self.hours_entries = {}
+        for i, day in enumerate(days):
+            ttk.Label(hours_frame, text=day).grid(row=i+1, column=0, padx=5, pady=5, sticky='w')
+            
+            # open time entry
+            open_entry = ttk.Entry(hours_frame, width=15)
+            open_entry.grid(row=i+1, column=1, padx=5, pady=5)
+            open_entry.insert(0, "12:00 PM")
+            
+            # close time entry
+            close_entry = ttk.Entry(hours_frame, width=15)
+            close_entry.grid(row=i+1, column=2, padx=5, pady=5)
+            close_entry.insert(0, "12:00 AM")
+            
+            self.hours_entries[day] = (open_entry, close_entry)
         
-        ttk.Button(workplace_frame, text="Delete Selected Workplace", 
-                  command=self.delete_workplace).grid(row=3, column=1, columnspan=1, pady=10, sticky='w')
+        # buttons
+        buttons_frame = ttk.Frame(workplace_frame)
+        buttons_frame.grid(row=2, column=0, columnspan=4, padx=10, pady=10, sticky='w')
         
-        # workplace list
-        self.workplace_list = ttk.Treeview(workplace_frame, columns=("id", "Name", "Hours"), show="headings")
-        self.workplace_list.grid(row=4, column=0, columnspan=2, pady=10, sticky='nsew')
-        self.workplace_list.heading("id", text="ID")
-        self.workplace_list.heading("Name", text="Name")
-        self.workplace_list.heading("Hours", text="Operating Hours")
-        self.workplace_list.column("id", width=50)
-        self.workplace_list.column("Name", width=200)
-        self.workplace_list.column("Hours", width=200)
+        ttk.Button(buttons_frame, text="Add/Update Workplace", 
+                  command=self.save_workplace).pack(side=tk.LEFT, padx=5)
         
-        # make the treeview expand with the window
+        ttk.Button(buttons_frame, text="Load Workplace", 
+                  command=self.load_workplace_hours).pack(side=tk.LEFT, padx=5)
+        
+        # workplace selection dropdown
+        ttk.Label(buttons_frame, text="Select Workplace:").pack(side=tk.LEFT, padx=5)
+        self.workplace_dropdown_var = tk.StringVar()
+        self.workplace_dropdown = ttk.Combobox(buttons_frame, 
+                                             textvariable=self.workplace_dropdown_var, 
+                                             width=30)
+        self.workplace_dropdown.pack(side=tk.LEFT, padx=5)
+        
+        # shift management section
+        shift_frame = ttk.LabelFrame(workplace_frame, text="Shift Management")
+        shift_frame.grid(row=3, column=0, columnspan=4, padx=10, pady=10, sticky='nsew')
+        
+        # shift inputs
+        ttk.Label(shift_frame, text="Day:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        self.shift_day_var = tk.StringVar()
+        self.shift_day_dropdown = ttk.Combobox(shift_frame, 
+                                             textvariable=self.shift_day_var,
+                                             values=days, 
+                                             width=15)
+        self.shift_day_dropdown.grid(row=0, column=1, padx=5, pady=5, sticky='w')
+        
+        ttk.Label(shift_frame, text="Start Time:").grid(row=0, column=2, padx=5, pady=5, sticky='w')
+        self.shift_start = ttk.Entry(shift_frame, width=15)
+        self.shift_start.grid(row=0, column=3, padx=5, pady=5, sticky='w')
+        self.shift_start.insert(0, "12:00 PM")
+        
+        ttk.Label(shift_frame, text="End Time:").grid(row=0, column=4, padx=5, pady=5, sticky='w')
+        self.shift_end = ttk.Entry(shift_frame, width=15)
+        self.shift_end.grid(row=0, column=5, padx=5, pady=5, sticky='w')
+        self.shift_end.insert(0, "8:00 PM")
+        
+        ttk.Label(shift_frame, text="Positions:").grid(row=0, column=6, padx=5, pady=5, sticky='w')
+        self.shift_positions = ttk.Spinbox(shift_frame, from_=1, to=10, width=5)
+        self.shift_positions.grid(row=0, column=7, padx=5, pady=5, sticky='w')
+        
+        ttk.Button(shift_frame, text="Add Shift", 
+                  command=self.add_shift).grid(row=0, column=8, padx=5, pady=5)
+        
+        # shift list
+        self.shift_list = ttk.Treeview(shift_frame, 
+                                     columns=("id", "Day", "Start", "End", "Positions"),
+                                     show="headings",
+                                     height=10)
+        self.shift_list.grid(row=1, column=0, columnspan=9, padx=5, pady=5, sticky='nsew')
+        
+        self.shift_list.heading("id", text="ID")
+        self.shift_list.heading("Day", text="Day")
+        self.shift_list.heading("Start", text="Start Time")
+        self.shift_list.heading("End", text="End Time")
+        self.shift_list.heading("Positions", text="Positions")
+        
+        self.shift_list.column("id", width=50)
+        
+        ttk.Button(shift_frame, text="Delete Selected Shift", 
+                  command=self.delete_shift).grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        
+        # make frames expandable
         workplace_frame.columnconfigure(0, weight=1)
         workplace_frame.columnconfigure(1, weight=1)
-        workplace_frame.rowconfigure(4, weight=1)
+        workplace_frame.columnconfigure(2, weight=1)
+        workplace_frame.columnconfigure(3, weight=1)
+        workplace_frame.rowconfigure(3, weight=1)
+        
+        shift_frame.columnconfigure(8, weight=1)
+        shift_frame.rowconfigure(1, weight=1)
         
     def setup_import_tab(self):
         import_frame = ttk.Frame(self.notebook)
         self.notebook.add(import_frame, text="Import Workers")
         
-        # control frame
+        # control panel
         control_frame = ttk.Frame(import_frame)
         control_frame.pack(fill=tk.X, pady=10)
         
-        # workplace selection
         ttk.Label(control_frame, text="Select Workplace:").pack(side=tk.LEFT, padx=5)
-        self.workplace_var = tk.StringVar()
-        self.workplace_dropdown = ttk.Combobox(control_frame, textvariable=self.workplace_var, width=30)
-        self.workplace_dropdown.pack(side=tk.LEFT, padx=5)
+        self.import_workplace_var = tk.StringVar()
+        self.import_workplace_dropdown = ttk.Combobox(control_frame, 
+                                                    textvariable=self.import_workplace_var,
+                                                    width=30)
+        self.import_workplace_dropdown.pack(side=tk.LEFT, padx=5)
         
-        # excel import
         ttk.Button(control_frame, text="Import Excel File", 
                   command=self.import_excel).pack(side=tk.LEFT, padx=5)
+                  
+        ttk.Button(control_frame, text="View Workers", 
+                  command=self.view_workers).pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(control_frame, text="Clear All Workers", 
-                  command=self.clear_workers).pack(side=tk.LEFT, padx=5)
+        # worker display frame
+        worker_frame = ttk.Frame(import_frame)
+        worker_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
-        # worker list and availability frame
-        workers_frame = ttk.Frame(import_frame)
-        workers_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # split the frame horizontally
-        workers_frame.columnconfigure(0, weight=2)
-        workers_frame.columnconfigure(1, weight=3)
-        workers_frame.rowconfigure(0, weight=1)
-        
-        # work list panel
-        worker_list_frame = ttk.LabelFrame(workers_frame, text="Workers")
-        worker_list_frame.grid(row=0, column=0, sticky='nsew', padx=5)
-        
-        self.worker_list = ttk.Treeview(worker_list_frame, 
-                                      columns=("id", "Name", "Email", "Work Study"),
+        # create worker list
+        self.worker_list = ttk.Treeview(worker_frame, 
+                                      columns=("id", "Name", "Email", "Work Study", "Availability"),
                                       show="headings")
-        self.worker_list.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
+        self.worker_list.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
         self.worker_list.heading("id", text="ID")
         self.worker_list.heading("Name", text="Name")
         self.worker_list.heading("Email", text="Email")
         self.worker_list.heading("Work Study", text="Work Study")
+        self.worker_list.heading("Availability", text="Availability")
+        
         self.worker_list.column("id", width=50)
-        
-        self.worker_list.bind('<<TreeviewSelect>>', self.show_worker_availability)
-        
-        # availability panel
-        availability_frame = ttk.LabelFrame(workers_frame, text="Availability")
-        availability_frame.grid(row=0, column=1, sticky='nsew', padx=5)
-        
-        self.availability_list = ttk.Treeview(availability_frame, 
-                                           columns=("Day", "Start Time", "End Time"),
-                                           show="headings")
-        self.availability_list.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
-        self.availability_list.heading("Day", text="Day")
-        self.availability_list.heading("Start Time", text="Start Time")
-        self.availability_list.heading("End Time", text="End Time")
+        self.worker_list.column("Name", width=150)
+        self.worker_list.column("Email", width=200)
+        self.worker_list.column("Work Study", width=100)
+        self.worker_list.column("Availability", width=300)
         
     def setup_schedule_tab(self):
         schedule_frame = ttk.Frame(self.notebook)
         self.notebook.add(schedule_frame, text="Generate Schedule")
         
-        # controls frame
-        controls = ttk.Frame(schedule_frame)
-        controls.pack(fill=tk.X, pady=10)
+        # control panel
+        control_frame = ttk.Frame(schedule_frame)
+        control_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Label(controls, text="Select Workplace:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(control_frame, text="Select Workplace:").pack(side=tk.LEFT, padx=5)
         self.schedule_workplace_var = tk.StringVar()
-        self.schedule_workplace_dropdown = ttk.Combobox(controls, 
+        self.schedule_workplace_dropdown = ttk.Combobox(control_frame, 
                                                       textvariable=self.schedule_workplace_var,
                                                       width=30)
         self.schedule_workplace_dropdown.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(controls, text="Generate Schedule", 
+        ttk.Label(control_frame, text="Start Date (YYYY-MM-DD):").pack(side=tk.LEFT, padx=5)
+        self.start_date = ttk.Entry(control_frame, width=15)
+        self.start_date.pack(side=tk.LEFT, padx=5)
+        # set default to current date
+        self.start_date.insert(0, datetime.now().strftime("%Y-%m-%d"))
+        
+        ttk.Button(control_frame, text="Generate Schedule", 
                   command=self.generate_schedule).pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(controls, text="Export Schedule", 
+        ttk.Button(control_frame, text="Export Schedule", 
                   command=self.export_schedule).pack(side=tk.LEFT, padx=5)
-        
-        # date selection
-        ttk.Label(controls, text="Start Date (YYYY-MM-DD):").pack(side=tk.LEFT, padx=5)
-        self.start_date_entry = ttk.Entry(controls, width=15)
-        self.start_date_entry.pack(side=tk.LEFT, padx=5)
-        
-        # get current date and set as default
-        today = datetime.now().strftime("%Y-%m-%d")
-        self.start_date_entry.insert(0, today)
         
         # schedule display
         schedule_display_frame = ttk.Frame(schedule_frame)
         schedule_display_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
-        # create scrollbars
-        x_scrollbar = ttk.Scrollbar(schedule_display_frame, orient=tk.HORIZONTAL)
+        # add scrollbars
         y_scrollbar = ttk.Scrollbar(schedule_display_frame, orient=tk.VERTICAL)
+        x_scrollbar = ttk.Scrollbar(schedule_display_frame, orient=tk.HORIZONTAL)
         
-        # create treeview with scrollbars
         self.schedule_display = ttk.Treeview(schedule_display_frame, 
-                                         columns=("Time", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"),
-                                         show="headings",
-                                         xscrollcommand=x_scrollbar.set,
-                                         yscrollcommand=y_scrollbar.set)
+                                           columns=("Time", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"),
+                                           show="headings",
+                                           yscrollcommand=y_scrollbar.set,
+                                           xscrollcommand=x_scrollbar.set)
         
-        # configure scrollbars
-        x_scrollbar.config(command=self.schedule_display.xview)
         y_scrollbar.config(command=self.schedule_display.yview)
+        x_scrollbar.config(command=self.schedule_display.xview)
         
-        # pack scrollbars and treeview
+        # pack elements
         y_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.schedule_display.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         x_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
         
+        # configure treeview columns
         for col in ("Time", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"):
             self.schedule_display.heading(col, text=col)
             self.schedule_display.column(col, width=150, minwidth=100)
     
-    def setup_shift_management_tab(self):
-        shift_frame = ttk.Frame(self.notebook)
-        self.notebook.add(shift_frame, text="Shift Management")
-        
-        # top controls
-        controls = ttk.Frame(shift_frame)
-        controls.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(controls, text="Select Workplace:").pack(side=tk.LEFT, padx=5)
-        self.shift_workplace_var = tk.StringVar()
-        self.shift_workplace_dropdown = ttk.Combobox(controls, 
-                                                  textvariable=self.shift_workplace_var,
-                                                  width=30)
-        self.shift_workplace_dropdown.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(controls, text="Load Shifts", 
-                  command=self.load_shifts).pack(side=tk.LEFT, padx=5)
-        
-        # shift adding controls
-        add_frame = ttk.LabelFrame(shift_frame, text="Add New Shift")
-        add_frame.pack(fill=tk.X, pady=10, padx=10)
-        
-        # day selection
-        ttk.Label(add_frame, text="Day:").grid(row=0, column=0, pady=5, padx=5, sticky='w')
-        self.shift_day_var = tk.StringVar()
-        day_options = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-        self.shift_day_dropdown = ttk.Combobox(add_frame, 
-                                            textvariable=self.shift_day_var,
-                                            values=day_options,
-                                            width=15)
-        self.shift_day_dropdown.grid(row=0, column=1, pady=5, padx=5, sticky='w')
-        
-        # start time
-        ttk.Label(add_frame, text="Start Time (HH:MM AM/PM):").grid(row=0, column=2, pady=5, padx=5, sticky='w')
-        self.shift_start_time = ttk.Entry(add_frame, width=15)
-        self.shift_start_time.grid(row=0, column=3, pady=5, padx=5, sticky='w')
-        self.shift_start_time.insert(0, "12:00 PM")
-        
-        # end time
-        ttk.Label(add_frame, text="End Time (HH:MM AM/PM):").grid(row=0, column=4, pady=5, padx=5, sticky='w')
-        self.shift_end_time = ttk.Entry(add_frame, width=15)
-        self.shift_end_time.grid(row=0, column=5, pady=5, padx=5, sticky='w')
-        self.shift_end_time.insert(0, "5:00 PM")
-        
-        # positions
-        ttk.Label(add_frame, text="Positions:").grid(row=1, column=0, pady=5, padx=5, sticky='w')
-        self.shift_positions = ttk.Spinbox(add_frame, from_=1, to=10, width=5)
-        self.shift_positions.grid(row=1, column=1, pady=5, padx=5, sticky='w')
-        
-        # add button
-        ttk.Button(add_frame, text="Add Shift", 
-                  command=self.add_shift).grid(row=1, column=2, columnspan=2, pady=5, padx=5, sticky='w')
-        
-        # shift list
-        shift_list_frame = ttk.Frame(shift_frame)
-        shift_list_frame.pack(fill=tk.BOTH, expand=True, pady=10, padx=10)
-        
-        self.shift_list = ttk.Treeview(shift_list_frame, 
-                                     columns=("id", "Day", "Start Time", "End Time", "Positions"),
-                                     show="headings")
-        self.shift_list.pack(fill=tk.BOTH, expand=True)
-        
-        self.shift_list.heading("id", text="ID")
-        self.shift_list.heading("Day", text="Day")
-        self.shift_list.heading("Start Time", text="Start Time")
-        self.shift_list.heading("End Time", text="End Time")
-        self.shift_list.heading("Positions", text="Positions")
-        
-        self.shift_list.column("id", width=50)
-        
-        # delete button
-        ttk.Button(shift_list_frame, text="Delete Selected Shift", 
-                  command=self.delete_shift).pack(pady=5)
+    def load_workplaces(self):
+        """Update all workplace dropdown lists"""
+        try:
+            conn = sqlite3.connect(self.db_file)
+            c = conn.cursor()
+            c.execute('SELECT id, name FROM workplaces')
+            workplaces = c.fetchall()
+            conn.close()
+            
+            workplace_names = [wp[1] for wp in workplaces]
+            workplace_ids = [wp[0] for wp in workplaces]
+            
+            # create mapping from name to ID
+            self.workplace_id_map = dict(zip(workplace_names, workplace_ids))
+            
+            # update all dropdowns
+            self.workplace_dropdown['values'] = workplace_names
+            self.import_workplace_dropdown['values'] = workplace_names
+            self.schedule_workplace_dropdown['values'] = workplace_names
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load workplaces: {str(e)}")
     
-    def add_workplace(self):
+    def save_workplace(self):
+        """Save workplace with operating hours for each day"""
         name = self.workplace_name.get()
-        open_time = self.opening_time.get()
-        close_time = self.closing_time.get()
         
-        if not all([name, open_time, close_time]):
-            messagebox.showerror("Error", "Please fill all fields")
+        if not name:
+            messagebox.showerror("Error", "Please enter a workplace name")
             return
             
-        try:
+        # collect hours for each day
+        hours_data = {}
+        for day, (open_entry, close_entry) in self.hours_entries.items():
+            open_time = open_entry.get()
+            close_time = close_entry.get()
+            
             # validate time format
             try:
                 datetime.strptime(open_time, "%I:%M %p")
                 datetime.strptime(close_time, "%I:%M %p")
             except ValueError:
-                messagebox.showerror("Error", "Time must be in format 'HH:MM AM/PM' (e.g., '9:00 AM')")
+                messagebox.showerror("Error", f"Invalid time format for {day}. Use HH:MM AM/PM format.")
+                return
+                
+            day_lower = day.lower()
+            hours_data[f"{day_lower}_open"] = open_time
+            hours_data[f"{day_lower}_close"] = close_time
+        
+        try:
+            conn = sqlite3.connect(self.db_file)
+            c = conn.cursor()
+            
+            # check if workplace already exists
+            c.execute('SELECT id FROM workplaces WHERE name = ?', (name,))
+            existing = c.fetchone()
+            
+            if existing:
+                # update existing workplace
+                workplace_id = existing[0]
+                
+                update_query = '''UPDATE workplaces SET 
+                                sunday_open = ?, sunday_close = ?,
+                                monday_open = ?, monday_close = ?,
+                                tuesday_open = ?, tuesday_close = ?,
+                                wednesday_open = ?, wednesday_close = ?,
+                                thursday_open = ?, thursday_close = ?,
+                                friday_open = ?, friday_close = ?,
+                                saturday_open = ?, saturday_close = ?
+                                WHERE id = ?'''
+                
+                c.execute(update_query, (
+                    hours_data['sunday_open'], hours_data['sunday_close'],
+                    hours_data['monday_open'], hours_data['monday_close'],
+                    hours_data['tuesday_open'], hours_data['tuesday_close'],
+                    hours_data['wednesday_open'], hours_data['wednesday_close'],
+                    hours_data['thursday_open'], hours_data['thursday_close'],
+                    hours_data['friday_open'], hours_data['friday_close'],
+                    hours_data['saturday_open'], hours_data['saturday_close'],
+                    workplace_id
+                ))
+                
+                message = f"Workplace '{name}' updated successfully!"
+                
+            else:
+                # insert new workplace
+                insert_query = '''INSERT INTO workplaces (
+                                name, 
+                                sunday_open, sunday_close,
+                                monday_open, monday_close,
+                                tuesday_open, tuesday_close,
+                                wednesday_open, wednesday_close,
+                                thursday_open, thursday_close,
+                                friday_open, friday_close,
+                                saturday_open, saturday_close
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+                
+                c.execute(insert_query, (
+                    name,
+                    hours_data['sunday_open'], hours_data['sunday_close'],
+                    hours_data['monday_open'], hours_data['monday_close'],
+                    hours_data['tuesday_open'], hours_data['tuesday_close'],
+                    hours_data['wednesday_open'], hours_data['wednesday_close'],
+                    hours_data['thursday_open'], hours_data['thursday_close'],
+                    hours_data['friday_open'], hours_data['friday_close'],
+                    hours_data['saturday_open'], hours_data['saturday_close']
+                ))
+                
+                message = f"Workplace '{name}' added successfully!"
+            
+            conn.commit()
+            conn.close()
+            
+            self.load_workplaces()
+            messagebox.showinfo("Success", message)
+            
+            # load shifts for the current workplace
+            self.workplace_dropdown_var.set(name)
+            self.load_shifts()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save workplace: {str(e)}")
+    
+    def load_workplace_hours(self):
+        """Load hours for selected workplace"""
+        selected_workplace = self.workplace_dropdown_var.get()
+        
+        if not selected_workplace:
+            messagebox.showerror("Error", "Please select a workplace to load")
+            return
+            
+        try:
+            conn = sqlite3.connect(self.db_file)
+            c = conn.cursor()
+            
+            # get workplace data
+            c.execute('''SELECT 
+                        sunday_open, sunday_close,
+                        monday_open, monday_close,
+                        tuesday_open, tuesday_close,
+                        wednesday_open, wednesday_close,
+                        thursday_open, thursday_close,
+                        friday_open, friday_close,
+                        saturday_open, saturday_close
+                        FROM workplaces WHERE name = ?''', (selected_workplace,))
+            
+            workplace_data = c.fetchone()
+            conn.close()
+            
+            if not workplace_data:
+                messagebox.showerror("Error", "Workplace not found")
+                return
+                
+            # update workplace name
+            self.workplace_name.delete(0, tk.END)
+            self.workplace_name.insert(0, selected_workplace)
+            
+            # update hours entries
+            days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+            for i, day in enumerate(days):
+                open_entry, close_entry = self.hours_entries[day]
+                
+                # clear and set new values
+                open_entry.delete(0, tk.END)
+                close_entry.delete(0, tk.END)
+                
+                open_entry.insert(0, workplace_data[i*2])
+                close_entry.insert(0, workplace_data[i*2 + 1])
+            
+            # load shifts for this workplace
+            self.load_shifts()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load workplace hours: {str(e)}")
+    
+    def add_shift(self):
+        """Add a shift for the selected workplace"""
+        workplace = self.workplace_dropdown_var.get()
+        
+        if not workplace:
+            messagebox.showerror("Error", "Please select a workplace first")
+            return
+            
+        day = self.shift_day_var.get()
+        start_time = self.shift_start.get()
+        end_time = self.shift_end.get()
+        positions = self.shift_positions.get()
+        
+        if not all([day, start_time, end_time]):
+            messagebox.showerror("Error", "Please fill in all shift details")
+            return
+            
+        try:
+            # validate time format
+            try:
+                datetime.strptime(start_time, "%I:%M %p")
+                datetime.strptime(end_time, "%I:%M %p")
+                positions = int(positions)
+            except ValueError:
+                messagebox.showerror("Error", "Invalid input format. Time must be in HH:MM AM/PM format")
                 return
                 
             conn = sqlite3.connect(self.db_file)
             c = conn.cursor()
-            c.execute('''INSERT INTO workplaces (name, hours_open, hours_close)
-                        VALUES (?, ?, ?)''', (name, open_time, close_time))
-            conn.commit()
-            conn.close()
-            
-            self.update_workplace_list()
-            self.workplace_name.delete(0, tk.END)
-            
-            messagebox.showinfo("Success", f"Workplace '{name}' added successfully!")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to add workplace: {str(e)}")
-    
-    def delete_workplace(self):
-        selected = self.workplace_list.selection()
-        if not selected:
-            messagebox.showerror("Error", "Please select a workplace to delete")
-            return
-            
-        workplace_id = self.workplace_list.item(selected[0], "values")[0]
-        
-        if messagebox.askyesno("Confirm Delete", "Are you sure you want to delete this workplace? This will remove all workers and schedules associated with it."):
-            try:
-                conn = sqlite3.connect(self.db_file)
-                c = conn.cursor()
-                
-                # delete all related data first
-                c.execute("DELETE FROM schedules WHERE workplace_id = ?", (workplace_id,))
-                c.execute("DELETE FROM shifts WHERE workplace_id = ?", (workplace_id,))
-                
-                # get worker IDs to delete their availability
-                c.execute("SELECT id FROM workers WHERE workplace_id = ?", (workplace_id,))
-                worker_ids = c.fetchall()
-                
-                for worker_id in worker_ids:
-                    c.execute("DELETE FROM availability WHERE worker_id = ?", (worker_id[0],))
-                
-                # delete workers
-                c.execute("DELETE FROM workers WHERE workplace_id = ?", (workplace_id,))
-                
-                # finally delete the workplace
-                c.execute("DELETE FROM workplaces WHERE id = ?", (workplace_id,))
-                
-                conn.commit()
-                conn.close()
-                
-                self.update_workplace_list()
-                messagebox.showinfo("Success", "Workplace deleted successfully!")
-                
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to delete workplace: {str(e)}")
-    
-    def update_workplace_list(self):
-        # clear existing items
-        for item in self.workplace_list.get_children():
-            self.workplace_list.delete(item)
-            
-        # fetch and display workplaces
-        conn = sqlite3.connect(self.db_file)
-        c = conn.cursor()
-        c.execute('SELECT id, name, hours_open, hours_close FROM workplaces')
-        workplaces = c.fetchall()
-        conn.close()
-        
-        for workplace in workplaces:
-            hours_str = f"{workplace[2]} - {workplace[3]}"
-            self.workplace_list.insert('', 'end', values=(workplace[0], workplace[1], hours_str))
-            
-        # update the workplace dropdowns
-        workplace_names = [w[1] for w in workplaces]
-        workplace_ids = [w[0] for w in workplaces]
-        
-        # create a mapping of workplace names to IDs
-        self.workplace_id_map = dict(zip(workplace_names, workplace_ids))
-        
-        self.workplace_dropdown['values'] = workplace_names
-        self.schedule_workplace_dropdown['values'] = workplace_names
-        self.shift_workplace_dropdown['values'] = workplace_names
-    
-    def import_excel(self):
-        if not self.workplace_var.get():
-            messagebox.showerror("Error", "Please select a workplace first")
-            return
-            
-        filename = filedialog.askopenfilename(
-            filetypes=[("Excel files", "*.xlsx *.xls")]
-        )
-        
-        if not filename:
-            return
-            
-        try:
-            # read from Excel file
-            df = pd.read_excel(filename)
-            
-            # get the workplace_id
-            conn = sqlite3.connect(self.db_file)
-            c = conn.cursor()
-            c.execute('SELECT id FROM workplaces WHERE name = ?', 
-                     (self.workplace_var.get(),))
-            workplace_id = c.fetchone()[0]
-            
-            # import the workers and their availability
-            imported_count = 0
-            for _, row in df.iterrows():
-                # check if we have the expected columns
-                required_columns = ['First Name', 'Last Name', 'Email', 'Work Study']
-                if not all(col in row.index for col in required_columns):
-                    messagebox.showerror("Error", "Excel file missing required columns. Expected: First Name, Last Name, Email, Work Study")
-                    conn.close()
-                    return
-                
-                # converting work study value
-                work_study_val = False
-                if pd.notna(row['Work Study']):
-                    work_study_val = row['Work Study'].upper() == 'Y'
-                
-                # adding workers
-                c.execute('''INSERT INTO workers 
-                            (workplace_id, first_name, last_name, email, work_study)
-                            VALUES (?, ?, ?, ?, ?)''',
-                         (workplace_id, row['First Name'], row['Last Name'], 
-                          row['Email'], work_study_val))
-                worker_id = c.lastrowid
-                imported_count += 1
-                
-                # adding availability
-                for day in ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 
-                           'Thursday', 'Friday', 'Saturday']:
-                    if day in row and pd.notna(row[day]) and row[day].lower() != 'na':
-                        try:
-                            start, end = self.parse_time_range(row[day])
-                            c.execute('''INSERT INTO availability 
-                                        (worker_id, day, start_time, end_time)
-                                        VALUES (?, ?, ?, ?)''',
-                                     (worker_id, day, start, end))
-                        except Exception as e:
-                            messagebox.showwarning("Warning", f"Could not parse time for {row['First Name']} {row['Last Name']} on {day}: {row[day]}")
-            
-            conn.commit()
-            conn.close()
-            
-            self.update_worker_list()
-            messagebox.showinfo("Success", f"{imported_count} workers imported successfully!")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to import Excel file: {str(e)}")
-    
-    def parse_time_range(self, time_str):
-        # convert "2 pm - 12 am" format to proper 12 hour times
-        # strip any extra whitespace
-        time_str = time_str.strip()
-        
-        try:
-            # split by hyphen or dash
-            if '-' in time_str:
-                parts = time_str.split('-')
-            else:
-                # if no hyphen, try alternative delimiter
-                parts = re.split(r'\s+to\s+', time_str)
-            
-            start_part = parts[0].strip().lower()
-            end_part = parts[1].strip().lower()
-            
-            # check if am/pm is missing and add it
-            if 'am' not in start_part and 'pm' not in start_part:
-                if int(re.search(r'(\d+)', start_part).group(1)) < 12:
-                    start_part += ' am'
-                else:
-                    start_part += ' pm'
-                    
-            if 'am' not in end_part and 'pm' not in end_part:
-                if int(re.search(r'(\d+)', end_part).group(1)) < 12:
-                    end_part += ' am'
-                else:
-                    end_part += ' pm'
-            
-            # try different time formats
-            formats = [
-                '%I %p',      # e.g., "2 pm"
-                '%I:%M %p',   # e.g., "2:00 pm"
-                '%I%p',       # e.g., "2pm"
-                '%I.%M %p'    # e.g., "2.00 pm"
-            ]
-            
-            start_time = None
-            end_time = None
-            
-            # try each format for start time
-            for fmt in formats:
-                try:
-                    start_time = datetime.strptime(start_part, fmt)
-                    break
-                except ValueError:
-                    continue
-                    
-            # try each format for end time
-            for fmt in formats:
-                try:
-                    end_time = datetime.strptime(end_part, fmt)
-                    break
-                except ValueError:
-                    continue
-            
-            if start_time is None or end_time is None:
-                raise ValueError(f"Could not parse time range: {time_str}")
-                
-            # format to standard format
-            start = start_time.strftime('%I:%M %p')
-            end = end_time.strftime('%I:%M %p')
-            
-            return start, end
-            
-        except Exception as e:
-            raise ValueError(f"Error parsing time range '{time_str}': {str(e)}")
-    
-    def update_worker_list(self):
-        # clear all existing items
-        for item in self.worker_list.get_children():
-            self.worker_list.delete(item)
-            
-        if not self.workplace_var.get():
-            return
-            
-        # fetch and display workers
-        conn = sqlite3.connect(self.db_file)
-        c = conn.cursor()
-        c.execute('''SELECT w.id, w.first_name, w.last_name, w.email, w.work_study 
-                    FROM workers w
-                    JOIN workplaces p ON w.workplace_id = p.id 
-                    WHERE p.name = ?''', (self.workplace_var.get(),))
-        workers = c.fetchall()
-        conn.close()
-        
-        for worker in workers:
-            self.worker_list.insert('', 'end', 
-                                  values=(worker[0],
-                                        f"{worker[1]} {worker[2]}", 
-                                        worker[3], 
-                                        'Yes' if worker[4] else 'No'))
-    
-    def show_worker_availability(self, event):
-        # clear availability list
-        for item in self.availability_list.get_children():
-            self.availability_list.delete(item)
-            
-        selected = self.worker_list.selection()
-        if not selected:
-            return
-            
-        worker_id = self.worker_list.item(selected[0], "values")[0]
-        
-        # fetch and display availability
-        conn = sqlite3.connect(self.db_file)
-        c = conn.cursor()
-        c.execute('''SELECT day, start_time, end_time
-                    FROM availability
-                    WHERE worker_id = ?
-                    ORDER BY CASE 
-                        WHEN day = 'Sunday' THEN 1
-                        WHEN day = 'Monday' THEN 2
-                        WHEN day = 'Tuesday' THEN 3
-                        WHEN day = 'Wednesday' THEN 4
-                        WHEN day = 'Thursday' THEN 5
-                        WHEN day = 'Friday' THEN 6
-                        WHEN day = 'Saturday' THEN 7
-                    END''', (worker_id,))
-        availability = c.fetchall()
-        conn.close()
-        
-        for avail in availability:
-            self.availability_list.insert('', 'end', values=avail)
-    
-    def clear_workers(self):
-        if not self.workplace_var.get():
-            messagebox.showerror("Error", "Please select a workplace first")
-            return
-            
-        if not messagebox.askyesno("Confirm", "Are you sure you want to delete ALL workers for this workplace?"):
-            return
-            
-        try:
-            conn = sqlite3.connect(self.db_file)
-            c = conn.cursor()
             
             # get workplace ID
-            c.execute('SELECT id FROM workplaces WHERE name = ?', (self.workplace_var.get(),))
+            c.execute('SELECT id FROM workplaces WHERE name = ?', (workplace,))
             workplace_id = c.fetchone()[0]
             
-            # get worker IDs
-            c.execute('SELECT id FROM workers WHERE workplace_id = ?', (workplace_id,))
-            worker_ids = c.fetchall()
-            
-            # delete availability records
-            for worker_id in worker_ids:
-                c.execute('DELETE FROM availability WHERE worker_id = ?', (worker_id[0],))
-                
-            # delete workers
-            c.execute('DELETE FROM workers WHERE workplace_id = ?', (workplace_id,))
+            # insert shift
+            c.execute('''INSERT INTO shifts 
+                        (workplace_id, day, start_time, end_time, positions)
+                        VALUES (?, ?, ?, ?, ?)''',
+                     (workplace_id, day, start_time, end_time, positions))
             
             conn.commit()
             conn.close()
             
-            self.update_worker_list()
-            messagebox.showinfo("Success", "All workers deleted successfully!")
+            # refresh shift list
+            self.load_shifts()
+            messagebox.showinfo("Success", f"Shift added for {day}")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to delete workers: {str(e)}")
+            messagebox.showerror("Error", f"Failed to add shift: {str(e)}")
     
     def load_shifts(self):
-        if not self.shift_workplace_var.get():
-            messagebox.showerror("Error", "Please select a workplace first")
+        """Load shifts for the selected workplace"""
+        workplace = self.workplace_dropdown_var.get()
+        
+        if not workplace:
             return
             
+        # clear existing shifts
+        for item in self.shift_list.get_children():
+            self.shift_list.delete(item)
+            
         try:
-            # clear shift list
-            for item in self.shift_list.get_children():
-                self.shift_list.delete(item)
-                
             conn = sqlite3.connect(self.db_file)
             c = conn.cursor()
             
             # get workplace ID
-            c.execute('SELECT id FROM workplaces WHERE name = ?', (self.shift_workplace_var.get(),))
+            c.execute('SELECT id FROM workplaces WHERE name = ?', (workplace,))
             workplace_id = c.fetchone()[0]
             
             # get shifts
@@ -680,64 +552,21 @@ class SchedulerApp:
                             WHEN day = 'Friday' THEN 6
                             WHEN day = 'Saturday' THEN 7
                         END''', (workplace_id,))
-            shifts = c.fetchall()
             
+            shifts = c.fetchall()
             conn.close()
             
+            # display shifts
             for shift in shifts:
                 self.shift_list.insert('', 'end', values=shift)
                 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load shifts: {str(e)}")
     
-    def add_shift(self):
-        if not self.shift_workplace_var.get():
-            messagebox.showerror("Error", "Please select a workplace first")
-            return
-            
-        day = self.shift_day_var.get()
-        start_time = self.shift_start_time.get()
-        end_time = self.shift_end_time.get()
-        positions = self.shift_positions.get()
-        
-        if not all([day, start_time, end_time, positions]):
-            messagebox.showerror("Error", "Please fill all fields")
-            return
-            
-        try:
-            # validate time format
-            try:
-                datetime.strptime(start_time, "%I:%M %p")
-                datetime.strptime(end_time, "%I:%M %p")
-                positions = int(positions)
-            except ValueError:
-                messagebox.showerror("Error", "Invalid input format. Time must be in format 'HH:MM AM/PM' and positions must be a number.")
-                return
-                
-            conn = sqlite3.connect(self.db_file)
-            c = conn.cursor()
-            
-            # get workplace ID
-            c.execute('SELECT id FROM workplaces WHERE name = ?', (self.shift_workplace_var.get(),))
-            workplace_id = c.fetchone()[0]
-            
-            # add shift
-            c.execute('''INSERT INTO shifts 
-                        (workplace_id, day, start_time, end_time, positions)
-                        VALUES (?, ?, ?, ?, ?)''',
-                     (workplace_id, day, start_time, end_time, positions))
-            
-            conn.commit()
-            conn.close()
-            
-            self.load_shifts()
-            messagebox.showinfo("Success", "Shift added successfully!")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to add shift: {str(e)}")
-    
     def delete_shift(self):
+        """Delete the selected shift"""
         selected = self.shift_list.selection()
+        
         if not selected:
             messagebox.showerror("Error", "Please select a shift to delete")
             return
@@ -753,101 +582,263 @@ class SchedulerApp:
             conn.commit()
             conn.close()
             
+            # refresh shift list
             self.load_shifts()
-            messagebox.showinfo("Success", "Shift deleted successfully!")
+            messagebox.showinfo("Success", "Shift deleted successfully")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to delete shift: {str(e)}")
     
-    def time_to_datetime(self, time_str, date_str=None):
-        # convert "9:00 AM" to datetime object
-        time_obj = datetime.strptime(time_str, "%I:%M %p")
+    def import_excel(self):
+        """Import workers from Excel file"""
+        workplace = self.import_workplace_var.get()
         
-        if date_str:
-            # if date provided, combine with time
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-            return datetime.combine(date_obj.date(), time_obj.time())
+        if not workplace:
+            messagebox.showerror("Error", "Please select a workplace first")
+            return
+            
+        filename = filedialog.askopenfilename(
+            filetypes=[("Excel files", "*.xlsx *.xls")]
+        )
+        
+        if not filename:
+            return
+            
+        try:
+            # read Excel file
+            df = pd.read_excel(filename)
+            
+            conn = sqlite3.connect(self.db_file)
+            c = conn.cursor()
+            
+            # get workplace ID
+            c.execute('SELECT id FROM workplaces WHERE name = ?', (workplace,))
+            workplace_id = c.fetchone()[0]
+            
+            # import workers and availability
+            imported_count = 0
+            for _, row in df.iterrows():
+                try:
+                    # check required columns
+                    if 'First Name' not in row or 'Last Name' not in row or 'Email' not in row:
+                        continue
+                        
+                    # get worker data
+                    first_name = row['First Name']
+                    last_name = row['Last Name']
+                    email = row['Email']
+                    
+                    # work study (default to N if not present)
+                    work_study = False
+                    if 'Work Study' in row and pd.notna(row['Work Study']):
+                        work_study = row['Work Study'].upper() == 'Y'
+                    
+                    # add worker to database
+                    c.execute('''INSERT INTO workers 
+                                (workplace_id, first_name, last_name, email, work_study)
+                                VALUES (?, ?, ?, ?, ?)''',
+                             (workplace_id, first_name, last_name, email, work_study))
+                    
+                    worker_id = c.lastrowid
+                    imported_count += 1
+                    
+                    # process availability for each day
+                    days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+                    for day in days:
+                        if day in row and pd.notna(row[day]) and str(row[day]).lower() != 'na':
+                            try:
+                                start_time, end_time = self.parse_time_range(str(row[day]))
+                                
+                                c.execute('''INSERT INTO availability 
+                                            (worker_id, day, start_time, end_time)
+                                            VALUES (?, ?, ?, ?)''',
+                                         (worker_id, day, start_time, end_time))
+                            except Exception as e:
+                                print(f"Error parsing time for {first_name} {last_name} on {day}: {str(e)}")
+                
+                except Exception as e:
+                    print(f"Error importing worker: {str(e)}")
+                    continue
+            
+            conn.commit()
+            conn.close()
+            
+            messagebox.showinfo("Success", f"Imported {imported_count} workers")
+            self.view_workers()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to import Excel file: {str(e)}")
+    
+    def parse_time_range(self, time_str):
+        """Parse time range from format like '2 pm - 12 am' to standard 12-hour format"""
+        time_str = time_str.strip().lower()
+        
+        # split into start and end times
+        if '-' in time_str:
+            parts = time_str.split('-')
         else:
-            return time_obj
+            parts = re.split(r'\s+to\s+', time_str)
+            
+        start_part = parts[0].strip()
+        end_part = parts[1].strip()
+        
+        # parse start time
+        start_match = re.search(r'(\d+)(?::(\d+))?\s*(am|pm)', start_part)
+        if not start_match:
+            # try without am/pm
+            start_match = re.search(r'(\d+)(?::(\d+))?', start_part)
+            if start_match:
+                hour = int(start_match.group(1))
+                minute = start_match.group(2) or "00"
+                ampm = "am" if hour < 12 else "pm"
+                start_time = f"{hour}:{minute} {ampm}"
+            else:
+                raise ValueError(f"Cannot parse start time: {start_part}")
+        else:
+            hour = int(start_match.group(1))
+            minute = start_match.group(2) or "00"
+            ampm = start_match.group(3)
+            start_time = f"{hour}:{minute} {ampm}"
+        
+        # parse end time
+        end_match = re.search(r'(\d+)(?::(\d+))?\s*(am|pm)', end_part)
+        if not end_match:
+            # try without am/pm
+            end_match = re.search(r'(\d+)(?::(\d+))?', end_part)
+            if end_match:
+                hour = int(end_match.group(1))
+                minute = end_match.group(2) or "00"
+                ampm = "am" if hour < 12 else "pm"
+                end_time = f"{hour}:{minute} {ampm}"
+            else:
+                raise ValueError(f"Cannot parse end time: {end_part}")
+        else:
+            hour = int(end_match.group(1))
+            minute = end_match.group(2) or "00"
+            ampm = end_match.group(3)
+            end_time = f"{hour}:{minute} {ampm}"
+        
+        # standardize format
+        start_dt = datetime.strptime(start_time, "%I:%M %p")
+        end_dt = datetime.strptime(end_time, "%I:%M %p")
+        
+        return start_dt.strftime("%I:%M %p"), end_dt.strftime("%I:%M %p")
+    
+    def view_workers(self):
+        """Display workers for the selected workplace"""
+        workplace = self.import_workplace_var.get()
+        
+        if not workplace:
+            messagebox.showerror("Error", "Please select a workplace first")
+            return
+            
+        # clear current worker list
+        for item in self.worker_list.get_children():
+            self.worker_list.delete(item)
+            
+        try:
+            conn = sqlite3.connect(self.db_file)
+            c = conn.cursor()
+            
+            # get workplace ID
+            c.execute('SELECT id FROM workplaces WHERE name = ?', (workplace,))
+            workplace_id = c.fetchone()[0]
+            
+            # get workers
+            c.execute('''SELECT w.id, w.first_name, w.last_name, w.email, w.work_study
+                        FROM workers w
+                        WHERE w.workplace_id = ?''', (workplace_id,))
+            
+            workers = c.fetchall()
+            
+            # for each worker, get their availability
+            for worker in workers:
+                worker_id, first_name, last_name, email, work_study = worker
+                
+                c.execute('''SELECT day, start_time, end_time
+                            FROM availability
+                            WHERE worker_id = ?
+                            ORDER BY CASE 
+                                WHEN day = 'Sunday' THEN 1
+                                WHEN day = 'Monday' THEN 2
+                                WHEN day = 'Tuesday' THEN 3
+                                WHEN day = 'Wednesday' THEN 4
+                                WHEN day = 'Thursday' THEN 5
+                                WHEN day = 'Friday' THEN 6
+                                WHEN day = 'Saturday' THEN 7
+                            END''', (worker_id,))
+                
+                availability = c.fetchall()
+                
+                # format availability for display
+                avail_str = ", ".join([f"{day}: {start}-{end}" for day, start, end in availability])
+                
+                # add to worker list
+                self.worker_list.insert('', 'end', 
+                                      values=(worker_id, 
+                                            f"{first_name} {last_name}", 
+                                            email, 
+                                            "Yes" if work_study else "No",
+                                            avail_str))
+            
+            conn.close()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load workers: {str(e)}")
     
     def generate_schedule(self):
-        if not self.schedule_workplace_var.get():
+        """Generate a weekly work schedule"""
+        workplace = self.schedule_workplace_var.get()
+        
+        if not workplace:
             messagebox.showerror("Error", "Please select a workplace")
             return
             
         try:
-            # get date
-            start_date_str = self.start_date_entry.get()
+            # get start date
+            start_date_str = self.start_date.get()
             try:
                 start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
             except ValueError:
                 messagebox.showerror("Error", "Invalid date format. Use YYYY-MM-DD")
                 return
                 
-            # get workplace info
             conn = sqlite3.connect(self.db_file)
             c = conn.cursor()
             
-            # get workplace hours and ID
-            c.execute('''SELECT id, hours_open, hours_close 
-                        FROM workplaces 
-                        WHERE name = ?''', (self.schedule_workplace_var.get(),))
-            workplace = c.fetchone()
-            
-            if not workplace:
-                messagebox.showerror("Error", "Workplace not found")
-                conn.close()
-                return
-                
-            workplace_id = workplace[0]
+            # get workplace ID and operating hours
+            c.execute('SELECT id FROM workplaces WHERE name = ?', (workplace,))
+            workplace_id = c.fetchone()[0]
             
             # get shifts for this workplace
             c.execute('''SELECT day, start_time, end_time, positions
                         FROM shifts
                         WHERE workplace_id = ?''', (workplace_id,))
+            
             shifts_data = c.fetchall()
             
-            # if no shifts defined, create default shifts based on workplace hours
             if not shifts_data:
-                messagebox.showinfo("Info", "No shifts defined. Using workplace hours to create a single shift per day.")
-                default_shifts = {}
-                for day in ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']:
-                    default_shifts[day] = [(workplace[1], workplace[2], 1)]  # (start, end, positions)
-            else:
-                # group shifts by day
-                default_shifts = {}
-                for day, start, end, positions in shifts_data:
-                    if day not in default_shifts:
-                        default_shifts[day] = []
-                    default_shifts[day].append((start, end, positions))
-            
+                messagebox.showerror("Error", "No shifts defined for this workplace. Please add shifts in the Workplace Hours tab.")
+                conn.close()
+                return
+                
             # get workers and their availability
             c.execute('''SELECT w.id, w.first_name, w.last_name, w.work_study,
                                a.day, a.start_time, a.end_time
                         FROM workers w
                         JOIN availability a ON w.id = a.worker_id
                         WHERE w.workplace_id = ?''', (workplace_id,))
+                        
             availability_data = c.fetchall()
-            
-            # group availability by worker and day
-            worker_availability = {}
-            for worker_id, fname, lname, work_study, day, start, end in availability_data:
-                if worker_id not in worker_availability:
-                    worker_availability[worker_id] = {
-                        'name': f"{fname} {lname}",
-                        'work_study': work_study,
-                        'days': {}
-                    }
-                
-                if day not in worker_availability[worker_id]['days']:
-                    worker_availability[worker_id]['days'][day] = []
-                    
-                worker_availability[worker_id]['days'][day].append((start, end))
             
             conn.close()
             
-            # generate schedule for a week
-            schedule = self.create_weekly_schedule(worker_availability, default_shifts, start_date)
+            if not availability_data:
+                messagebox.showerror("Error", "No workers with availability found")
+                return
+                
+            # generate schedule
+            schedule = self.create_schedule(shifts_data, availability_data, start_date)
             
             # display schedule
             self.display_schedule(schedule)
@@ -857,73 +848,101 @@ class SchedulerApp:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate schedule: {str(e)}")
     
-    def create_weekly_schedule(self, worker_availability, shifts_by_day, start_date):
-        # create empty schedule
-        days_of_week = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-        current_date = start_date
+    def create_schedule(self, shifts_data, availability_data, start_date):
+        """Create a weekly schedule based on shifts and worker availability"""
+        # map of day names to day numbers (0=Monday in datetime, but we want Sunday=0)
+        day_to_num = {
+            'Sunday': 6,
+            'Monday': 0,
+            'Tuesday': 1,
+            'Wednesday': 2,
+            'Thursday': 3,
+            'Friday': 4,
+            'Saturday': 5
+        }
+        
+        num_to_day = {v: k for k, v in day_to_num.items()}
+        
+        # group shifts by day
+        shifts_by_day = {}
+        for day, start, end, positions in shifts_data:
+            if day not in shifts_by_day:
+                shifts_by_day[day] = []
+            shifts_by_day[day].append((start, end, positions))
+        
+        # group worker availability by day
+        workers_by_day = {}
+        for worker_id, fname, lname, work_study, day, start, end in availability_data:
+            if day not in workers_by_day:
+                workers_by_day[day] = []
+                
+            workers_by_day[day].append({
+                'id': worker_id,
+                'name': f"{fname} {lname}",
+                'work_study': work_study,
+                'start': start,
+                'end': end
+            })
+        
+        # create empty schedule organized by shift time
         schedule = {}
         
-        # for each day of the week
-        for day_offset in range(7):
-            day_name = days_of_week[current_date.weekday() if current_date.weekday() < 7 else 0]
-            day_date = current_date.strftime("%Y-%m-%d")
-            
-            # skip days with no shifts
-            if day_name not in shifts_by_day:
-                current_date += timedelta(days=1)
-                continue
-                
-            # process each shift for this day
-            for shift_start, shift_end, positions in shifts_by_day[day_name]:
+        # for each shift
+        for day, shifts in shifts_by_day.items():
+            # for each shift on this day
+            for shift_start, shift_end, positions in shifts:
                 shift_key = f"{shift_start} - {shift_end}"
                 
                 if shift_key not in schedule:
-                    schedule[shift_key] = {day: [] for day in days_of_week}
+                    schedule[shift_key] = {d: [] for d in ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']}
                 
                 # find available workers for this shift
-                available_workers = []
-                for worker_id, worker_data in worker_availability.items():
-                    if day_name in worker_data['days']:
-                        # check if worker is available during this shift
-                        for avail_start, avail_end in worker_data['days'][day_name]:
-                            shift_start_time = self.time_to_datetime(shift_start)
-                            shift_end_time = self.time_to_datetime(shift_end)
-                            avail_start_time = self.time_to_datetime(avail_start)
-                            avail_end_time = self.time_to_datetime(avail_end)
-                            
-                            # worker is available if their availability covers the entire shift
-                            if avail_start_time <= shift_start_time and avail_end_time >= shift_end_time:
-                                available_workers.append({
-                                    'id': worker_id,
-                                    'name': worker_data['name'],
-                                    'work_study': worker_data['work_study']
-                                })
-                                break
-                
-                # sort workers by work study status (prioritize work study)
-                available_workers.sort(key=lambda x: x['work_study'], reverse=True)
-                
-                # assign workers to positions
-                assigned_workers = available_workers[:positions]
-                schedule[shift_key][day_name] = [worker['name'] for worker in assigned_workers]
-            
-            current_date += timedelta(days=1)
+                if day in workers_by_day:
+                    available_workers = []
+                    
+                    for worker in workers_by_day[day]:
+                        # check if worker is available for this shift
+                        worker_start = self.time_to_datetime(worker['start'])
+                        worker_end = self.time_to_datetime(worker['end'])
+                        
+                        shift_start_dt = self.time_to_datetime(shift_start)
+                        shift_end_dt = self.time_to_datetime(shift_end)
+                        
+                        # worker is available if their time covers the shift
+                        if worker_start <= shift_start_dt and worker_end >= shift_end_dt:
+                            available_workers.append(worker)
+                    
+                    # prioritize work study students
+                    available_workers.sort(key=lambda w: (w['work_study'], w['name']), reverse=True)
+                    
+                    # assign workers to positions
+                    assigned_workers = available_workers[:positions]
+                    schedule[shift_key][day] = [w['name'] for w in assigned_workers]
         
         return schedule
     
+    def time_to_datetime(self, time_str):
+        """Convert time string to datetime object"""
+        return datetime.strptime(time_str, "%I:%M %p")
+    
     def display_schedule(self, schedule):
+        """Display the generated schedule"""
         # clear existing items
         for item in self.schedule_display.get_children():
             self.schedule_display.delete(item)
             
         # sort shifts by start time
-        sorted_shifts = sorted(schedule.keys(), key=lambda x: self.time_to_datetime(x.split(' - ')[0]))
+        def get_start_time(shift_key):
+            start_time = shift_key.split(' - ')[0]
+            return self.time_to_datetime(start_time)
+            
+        sorted_shifts = sorted(schedule.keys(), key=get_start_time)
         
-        # display schedule
         days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
         
+        # add rows for each shift
         for shift in sorted_shifts:
-            row_data = [shift]  # time column
+            row_data = [shift]
             
             for day in days:
                 workers = schedule[shift][day]
@@ -935,6 +954,7 @@ class SchedulerApp:
             self.schedule_display.insert('', 'end', values=tuple(row_data))
     
     def export_schedule(self):
+        """Export the schedule to Excel"""
         if not self.schedule_display.get_children():
             messagebox.showerror("Error", "No schedule to export. Please generate a schedule first.")
             return
@@ -948,7 +968,7 @@ class SchedulerApp:
             return
             
         try:
-            # create DataFrame from treeview
+            # create dataFrame from treeview
             data = []
             columns = ["Time", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
             
